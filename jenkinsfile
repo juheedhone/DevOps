@@ -1,12 +1,83 @@
 pipeline {
-  agent {
-    docker { image 'node:16-alpine' }
-  }
-  stages {
-    stage('Test') {
-      steps {
-        sh 'node --version'
-      }
+    agent any
+
+    stages {
+        stage('git checkout') {
+            steps {
+                git branch: 'master', url: 'https://github.com/ankit-ady/student-ui.git'
+            }
+        }
+        
+        stage('docker stage') {
+            steps {
+
+                sh ''' apt update && apt install docker.io -y && apt install -y awscli
+                  docker build -t demo .'''
+            }
+        }
+        stage('make aws dir') {
+            steps {
+                sh '''
+                mkdir -p ~/.aws
+                touch ~/.aws/credentials
+                
+                '''
+            }
+        }
+        stage('aws config') {
+            steps {
+                withCredentials([aws(accessKeyVariable: 'AWS_ACCESS_KEY_ID', credentialsId: 'ankit-cred', secretKeyVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+       sh '''  cat << EOF > ~/.aws/credentials
+                [default]
+                aws_access_key_id = ${AWS_ACCESS_KEY_ID}
+                aws_secret_access_key = ${AWS_SECRET_ACCESS_KEY}
+                 '''
+                 sh ''' aws s3 ls  '''
+
+}
+
+            }
+        }
+        stage('docker push') {
+            steps {
+                sh '''
+                aws ecr get-login-password --region us-east-1 |    docker login --username AWS --password-stdin 851725418448.dkr.ecr.us-east-1.amazonaws.com
+                 docker tag demo 851725418448.dkr.ecr.us-east-1.amazonaws.com/student-tomcat:$BUILD_TIMESTAMP
+                 docker push 851725418448.dkr.ecr.us-east-1.amazonaws.com/student-tomcat:$BUILD_TIMESTAMP
+                 docker system prune -a -f '''
+            }
+        }
+        stage('manifest checkout') {
+            steps {
+               checkout scmGit(branches: [[name: '*/main']], extensions: [], userRemoteConfigs: [[url: 'https://github.com/ankit-ady/kubenetes-cd.git']])
+            }
+        }
+        stage('update tag') {
+            steps {
+               sh '''
+               ls -al
+               sed -i "s/student-tomcat:.*/student-tomcat:$BUILD_TIMESTAMP/" dev/back.yaml
+
+               '''
+            }
+        }
+        stage('jenkins git push') {
+              steps {
+                script {
+                    withCredentials([gitUsernamePassword(credentialsId: 'sigma-cred', gitToolName: 'Default')]) {
+
+               sh '''
+               git config --global user.name "ankit-ady"
+                        git config --global user.email "ankitramteke63@gmail"
+                        git init
+                        git add .
+                        git commit -m "Update image :- $BUILD_TIMESTAMP"
+                        git push origin main
+
+               '''
+                }
+            }
+        }
     }
-  }
+}
 }
